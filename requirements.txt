@@ -1,0 +1,10 @@
+torch>=2.0.0
+torchmetrics>=0.11.0
+fastapi
+uvicorn
+h5py
+numpy
+pydantic
+python-multipart
+google-cloud-storage
+typing-extensions
