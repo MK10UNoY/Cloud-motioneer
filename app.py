@@ -20,7 +20,7 @@ app.add_middleware(
 # Ensure the Checkpoint directory exists
 download_checkpoint("cloud_checkpoint", "cloud_motion_diffusion_with_time_embed_new_loss_final.pth", "checkpoints/cloud_motion_v1.pth")
 # Load the model once
-predictor = Predictor("checkpoints/cloud_motion_v1.pth", interval_minutes=30)
+predictor = Predictor("checkpoints/cloud_motion_v1.pth", interval_minutes=30) 
 
 @app.post("/predict")
 async def predict(files: List[UploadFile] = File(...)):
