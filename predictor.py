@@ -71,6 +71,7 @@ class Predictor:
             predicted_times = ["T7", "T8"]
 
         return {
-            "predicted_timestamps": predicted_times,
-            "predicted_frames": predicted  # torch.Tensor (1, 2, 6, 128, 128)
-        }
+            "predicted_timestamps": result["predicted_timestamps"],
+            "predicted_frames": result["predicted_frames"].tolist(),
+            "predicted_shape": list(result["predicted_frames"].shape)
+        }   
