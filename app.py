@@ -9,6 +9,7 @@ from checkpoint import download_checkpoint
 from cloud_uploader import download_and_unzip_from_gcs
 from google.cloud import storage
 from fastapi.responses import HTMLResponse, JSONResponse
+import time
 
 app = FastAPI()
 
@@ -103,15 +104,23 @@ async def get_upload_url(payload: dict = Body(...)):
 async def sample_predict():
     """
     Predict using 6 .h5 files already uploaded to 'upload/' folder in the default bucket.
+    Logs progress to a log file for debugging.
     """
     bucket_name = "cloud_checkpoint"  # Change if your bucket is different
     folder = "upload/"
+    log_path = "sample_predict.log"
+    def log(msg):
+        with open(log_path, "a") as f:
+            f.write(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
+    log("START: /sample called")
     # List .h5 files in the folder
     client = storage.Client()
     bucket = client.bucket(bucket_name)
     blobs = list(bucket.list_blobs(prefix=folder))
     h5_files = [b for b in blobs if b.name.endswith(".h5") and not b.name.endswith("/")]
+    log(f"Found {len(h5_files)} .h5 files in GCS.")
     if len(h5_files) != 6:
+        log("ERROR: Incorrect number of .h5 files.")
         return {"error": f"Expected 6 .h5 files in gs://{bucket_name}/{folder}, found {len(h5_files)}."}
     # Download files to temp dir
     temp_dir = f"temp_uploads/{uuid.uuid4()}"
@@ -121,18 +130,26 @@ async def sample_predict():
         for blob in h5_files:
             fname = os.path.basename(blob.name)
             fpath = os.path.join(temp_dir, fname)
+            log(f"Downloading {blob.name} to {fpath}")
             blob.download_to_filename(fpath)
             file_paths.append(fpath)
+        log("All files downloaded. Starting prediction...")
+        t0 = time.time()
         result = predictor.predict_from_files(file_paths)
+        t1 = time.time()
+        log(f"Prediction complete in {t1-t0:.2f} seconds.")
+        log("SUCCESS: Returning result.")
         return {
             "predicted_timestamps": result["predicted_timestamps"],
             "predicted_frames": result["predicted_frames"].tolist(),
             "predicted_shape": list(result["predicted_frames"].shape)
         }
     except Exception as e:
+        log(f"ERROR: {str(e)}")
         return {"error": str(e)}
     finally:
         shutil.rmtree(temp_dir)
+        log("Cleaned up temp files.")
 
 @app.get("/isronaut/upload-ui", response_class=HTMLResponse)
 def upload_ui():
