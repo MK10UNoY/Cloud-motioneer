@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile, Form
+from fastapi import FastAPI, File, UploadFile, Form, Body
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List
 import shutil
@@ -6,6 +6,9 @@ import os
 import uuid
 from predictor import Predictor
 from checkpoint import download_checkpoint
+from cloud_uploader import download_and_unzip_from_gcs
+from google.cloud import storage
+from fastapi.responses import HTMLResponse
 
 app = FastAPI()
 
@@ -21,6 +24,10 @@ app.add_middleware(
 download_checkpoint("cloud_checkpoint", "cloud_motion_diffusion_with_time_embed_new_loss_final.pth", "checkpoints/cloud_motion_v1.pth")
 # Load the model once
 predictor = Predictor("checkpoints/cloud_motion_v1.pth", interval_minutes=30) 
+
+@app.get("/")
+def read_root():
+    return {"message": "Welcome to the Cloud Motion Predictor API."}
 
 @app.post("/predict")
 async def predict(files: List[UploadFile] = File(...)):
@@ -46,3 +53,71 @@ async def predict(files: List[UploadFile] = File(...)):
         return {"error": str(e)}
     finally:
         shutil.rmtree(temp_dir)
+
+@app.post("/predict-gcs")
+async def predict_gcs(payload: dict = Body(...)):
+    """
+    Expects JSON: { "gcs_uri": "gs://bucket/path/to/file.zip" }
+    """
+    gcs_uri = payload.get("gcs_uri")
+    if not gcs_uri:
+        return {"error": "Missing gcs_uri in request body."}
+    temp_dir = f"temp_uploads/{uuid.uuid4()}"
+    os.makedirs(temp_dir, exist_ok=True)
+    try:
+        file_paths = download_and_unzip_from_gcs(gcs_uri, temp_dir)
+        result = predictor.predict_from_files(file_paths)
+        return {
+            "predicted_timestamps": result["predicted_timestamps"],
+            "predicted_frames": result["predicted_frames"].tolist(),
+            "predicted_shape": list(result["predicted_frames"].shape)
+        }
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        shutil.rmtree(temp_dir)
+
+@app.post("/get-upload-url")
+async def get_upload_url(payload: dict = Body(...)):
+    """
+    Expects JSON: { "filename": "yourfile.zip", "bucket": "optional-bucket-name" }
+    Returns: { "url": signed_url, "gcs_uri": "gs://bucket/filename" }
+    """
+    filename = payload.get("filename")
+    bucket_name = payload.get("bucket") or "cloud_checkpoint"  # Default bucket
+    if not filename:
+        return {"error": "Missing filename in request body."}
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blob = bucket.blob(filename)
+    url = blob.generate_signed_url(
+        version="v4",
+        expiration=600,  # 10 minutes
+        method="PUT",
+        content_type="application/zip"
+    )
+    gcs_uri = f"gs://{bucket_name}/{filename}"
+    return {"url": url, "gcs_uri": gcs_uri}
+
+@app.get("/isronaut/upload-ui", response_class=HTMLResponse)
+def upload_ui():
+    return """
+    <html>
+      <head>
+        <title>Cloud Motion Predictor</title>
+        <style>
+          body { font-family: Arial; margin: 40px; background-color: #f7f7f7; }
+          form { padding: 20px; background: white; border-radius: 8px; box-shadow: 0 0 10px #ccc; }
+          input[type=file] { margin-bottom: 10px; }
+          input[type=submit] { padding: 8px 16px; border: none; background-color: #4CAF50; color: white; border-radius: 4px; cursor: pointer; }
+        </style>
+      </head>
+      <body>
+        <h2>Upload 6 .h5 Files for Prediction</h2>
+        <form action="/predict" enctype="multipart/form-data" method="post">
+          <input type="file" name="files" multiple required><br>
+          <input type="submit" value="Run Prediction">
+        </form>
+      </body>
+    </html>
+    """
