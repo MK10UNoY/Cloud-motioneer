@@ -8,7 +8,7 @@ from predictor import Predictor
 from checkpoint import download_checkpoint
 from cloud_uploader import download_and_unzip_from_gcs
 from google.cloud import storage
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 app = FastAPI()
 
@@ -99,6 +99,41 @@ async def get_upload_url(payload: dict = Body(...)):
     gcs_uri = f"gs://{bucket_name}/{filename}"
     return {"url": url, "gcs_uri": gcs_uri}
 
+@app.post("/sample")
+async def sample_predict():
+    """
+    Predict using 6 .h5 files already uploaded to 'upload/' folder in the default bucket.
+    """
+    bucket_name = "cloud_checkpoint"  # Change if your bucket is different
+    folder = "upload/"
+    # List .h5 files in the folder
+    client = storage.Client()
+    bucket = client.bucket(bucket_name)
+    blobs = list(bucket.list_blobs(prefix=folder))
+    h5_files = [b for b in blobs if b.name.endswith(".h5") and not b.name.endswith("/")]
+    if len(h5_files) != 6:
+        return {"error": f"Expected 6 .h5 files in gs://{bucket_name}/{folder}, found {len(h5_files)}."}
+    # Download files to temp dir
+    temp_dir = f"temp_uploads/{uuid.uuid4()}"
+    os.makedirs(temp_dir, exist_ok=True)
+    file_paths = []
+    try:
+        for blob in h5_files:
+            fname = os.path.basename(blob.name)
+            fpath = os.path.join(temp_dir, fname)
+            blob.download_to_filename(fpath)
+            file_paths.append(fpath)
+        result = predictor.predict_from_files(file_paths)
+        return {
+            "predicted_timestamps": result["predicted_timestamps"],
+            "predicted_frames": result["predicted_frames"].tolist(),
+            "predicted_shape": list(result["predicted_frames"].shape)
+        }
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        shutil.rmtree(temp_dir)
+
 @app.get("/isronaut/upload-ui", response_class=HTMLResponse)
 def upload_ui():
     return """
@@ -118,6 +153,38 @@ def upload_ui():
           <input type="file" name="files" multiple required><br>
           <input type="submit" value="Run Prediction">
         </form>
+      </body>
+    </html>
+    """
+
+@app.get("/sample-ui", response_class=HTMLResponse)
+def sample_ui():
+    return """
+    <html>
+      <head>
+        <title>Sample Prediction</title>
+        <style>
+          body { font-family: Arial; margin: 40px; background-color: #f7f7f7; }
+          .container { padding: 20px; background: white; border-radius: 8px; box-shadow: 0 0 10px #ccc; max-width: 500px; margin: auto; }
+          button { padding: 10px 20px; background: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; }
+          #result { margin-top: 20px; white-space: pre-wrap; }
+        </style>
+        <script>
+        async function runSample() {
+          document.getElementById('result').innerText = 'Running prediction...';
+          const resp = await fetch('/sample', { method: 'POST' });
+          const data = await resp.json();
+          document.getElementById('result').innerText = JSON.stringify(data, null, 2);
+        }
+        </script>
+      </head>
+      <body>
+        <div class="container">
+          <h2>Run Sample Prediction</h2>
+          <p>This will use the 6 .h5 files in the <b>upload/</b> folder of your bucket.</p>
+          <button onclick="runSample()">Start Prediction</button>
+          <div id="result"></div>
+        </div>
       </body>
     </html>
     """
